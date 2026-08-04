@@ -22,6 +22,12 @@ ArchitectureRole = Literal[
     "tests",
     "unknown",
 ]
+ImportClassification = Literal[
+    "internal",
+    "standard_library",
+    "third_party",
+    "unresolved_internal",
+]
 
 
 class ParameterInfo(BaseModel):
@@ -60,6 +66,7 @@ class ImportInfo(BaseModel):
     alias: str | None = None
     level: int = 0
     is_internal: bool | None = None
+    classification: ImportClassification | None = None
     resolved_paths: list[str] = Field(default_factory=list)
 
 

@@ -12,3 +12,17 @@ build/
 .env
 analysis.json
 dependencies.mmd
+# Documentos generados
+*.docx
+*.pdf
+
+# Imágenes
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+
+# Resultados generados por CodeAtlas
+/reports/
+/artifacts/

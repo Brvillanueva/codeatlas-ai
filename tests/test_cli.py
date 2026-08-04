@@ -39,12 +39,12 @@ def test_analyze_exports_json(tmp_path: Path) -> None:
     assert '"repository_name"' in output.read_text(encoding="utf-8")
 
 
-def test_graph_defaults_to_executive_view(tmp_path: Path) -> None:
+def test_graph_defaults_to_technical_view(tmp_path: Path) -> None:
     output = tmp_path / "graph.mmd"
     result = runner.invoke(app, ["graph", str(FIXTURE_ROOT), "--output", str(output)])
 
     assert result.exit_code == 0
-    assert output.read_text(encoding="utf-8").startswith("flowchart LR")
+    assert output.read_text(encoding="utf-8").startswith("graph TD")
 
 
 def test_graph_can_export_complete_technical_view(tmp_path: Path) -> None:
@@ -57,12 +57,33 @@ def test_graph_can_export_complete_technical_view(tmp_path: Path) -> None:
     assert output.read_text(encoding="utf-8").startswith("graph TD")
 
 
-def test_dependencies_exports_the_complete_import_graph(tmp_path: Path) -> None:
+def test_dependencies_exports_a_package_summary_by_default(tmp_path: Path) -> None:
     output = tmp_path / "dependencies.mmd"
     result = runner.invoke(app, ["dependencies", str(FIXTURE_ROOT), "--output", str(output)])
 
     assert result.exit_code == 0
-    assert output.read_text(encoding="utf-8").startswith("graph TD")
+    assert output.read_text(encoding="utf-8").startswith("flowchart LR")
+
+
+def test_dependencies_can_export_complete_file_imports(tmp_path: Path) -> None:
+    output = tmp_path / "dependencies.mmd"
+    result = runner.invoke(
+        app, ["dependencies", str(FIXTURE_ROOT), "--level", "file", "--output", str(output)]
+    )
+
+    assert result.exit_code == 0
+    assert output.read_text(encoding="utf-8").startswith("flowchart LR")
+
+
+def test_dependencies_accepts_a_package_scope(tmp_path: Path) -> None:
+    output = tmp_path / "dependencies.mmd"
+    result = runner.invoke(
+        app,
+        ["dependencies", str(FIXTURE_ROOT), "--package", "package", "--output", str(output)],
+    )
+
+    assert result.exit_code == 0
+    assert "package" in output.read_text(encoding="utf-8")
 
 
 def test_classes_exports_a_class_diagram(tmp_path: Path) -> None:
@@ -81,8 +102,15 @@ def test_report_exports_editable_word_document(tmp_path: Path) -> None:
     assert output.exists()
     document = Document(output)
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    table_text = "\n".join(
+        cell.text for table in document.tables for row in table.rows for cell in row.cells
+    )
     assert "Contenido" in text
-    assert "Arquitectura detectada" in text
+    assert "Hipótesis de organización técnica" in text
+    assert "Datos detectados y alcance" in text
+    assert "Archivo: tests/test_service.py" not in text
+    assert "Dato detectado" in table_text
+    assert "Hipótesis estática" in table_text
 
 
 def test_report_ai_without_key_fails_before_creating_document(tmp_path: Path, monkeypatch) -> None:

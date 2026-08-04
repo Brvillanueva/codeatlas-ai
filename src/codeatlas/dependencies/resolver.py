@@ -12,6 +12,7 @@ class DependencyResolver:
 
     def resolve(self, files: list[FileAnalysis]) -> tuple[list[DependencyEdge], list[str]]:
         index = self._build_index(files)
+        internal_roots = {module.split(".", maxsplit=1)[0] for module in index}
         edges: list[DependencyEdge] = []
         external: set[str] = set()
         for file in files:
@@ -22,6 +23,7 @@ class DependencyResolver:
                 paths = self._resolve(candidates, index)
                 if paths:
                     import_info.is_internal = True
+                    import_info.classification = "internal"
                     import_info.resolved_paths = sorted(paths)
                     edges.extend(
                         DependencyEdge(
@@ -31,9 +33,17 @@ class DependencyResolver:
                         if path != file.path
                     )
                 else:
-                    import_info.is_internal = False
                     root = self._external_root(import_info.module, import_info.imported_names)
-                    if root and root not in sys.stdlib_module_names and root != "__future__":
+                    if root in sys.stdlib_module_names or root == "__future__":
+                        import_info.is_internal = False
+                        import_info.classification = "standard_library"
+                    elif root in internal_roots:
+                        import_info.is_internal = None
+                        import_info.classification = "unresolved_internal"
+                    else:
+                        import_info.is_internal = False
+                        import_info.classification = "third_party"
+                    if import_info.classification == "third_party" and root:
                         external.add(root)
         unique = {(edge.source, edge.target, edge.imported_module): edge for edge in edges}
         return list(unique.values()), sorted(external)

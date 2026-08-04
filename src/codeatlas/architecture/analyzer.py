@@ -18,19 +18,34 @@ class ArchitectureAnalyzer:
 
     _ROLE_RULES: tuple[tuple[ArchitectureRole, tuple[str, ...]], ...] = (
         ("tests", ("test", "tests", "conftest")),
-        ("configuration", ("config", "setting", "environment", "env")),
+        (
+            "configuration",
+            ("config", "configuration", "setting", "settings", "environment", "env"),
+        ),
         (
             "orchestration",
-            ("agent", "orchestr", "workflow", "supervisor", "pipeline"),
+            ("agent", "agents", "orchestr", "workflow", "supervisor", "pipeline", "graph"),
         ),
         (
             "persistence",
-            ("repository", "database", "storage", "store", "dao", "persistence"),
+            (
+                "repository",
+                "repositories",
+                "database",
+                "databases",
+                "storage",
+                "store",
+                "dao",
+                "persistence",
+            ),
         ),
         ("service", ("service", "use_case", "usecase", "handler")),
-        ("domain", ("model", "entity", "schema", "domain", "dto")),
+        ("domain", ("model", "models", "entity", "schema", "domain", "dto")),
         ("infrastructure", ("client", "adapter", "integration", "infrastructure", "gateway")),
-        ("entrypoint", ("cli", "main", "app", "api", "route", "view", "controller")),
+        (
+            "entrypoint",
+            ("cli", "main", "app", "api", "route", "routes", "view", "controller"),
+        ),
     )
 
     _DISPLAY_NAMES: dict[ArchitectureRole, str] = {
@@ -92,27 +107,31 @@ class ArchitectureAnalyzer:
         )
 
     def _classify(self, file: FileAnalysis) -> tuple[ArchitectureRole, list[str]]:
-        searchable = " ".join(
-            [
-                file.path.lower(),
-                file.module_name.lower(),
-                (file.docstring or "").lower(),
-                *(item.module.lower() for item in file.imports),
-                *(item.name.lower() for item in file.classes),
-                *(item.name.lower() for item in file.functions),
-                *(decorator.lower() for item in file.classes for decorator in item.decorators),
-                *(decorator.lower() for item in file.functions for decorator in item.decorators),
-            ]
-        )
+        path_tokens = self._path_tokens(file.path)
         for role, terms in self._ROLE_RULES:
-            matched = [
-                term
-                for term in terms
-                if re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", searchable)
-            ]
+            matched = [term for term in terms if term in path_tokens]
             if matched:
-                return role, [f"{file.path}: coincidencia {term!r}" for term in matched[:2]]
-        return "unknown", [f"{file.path}: sin patrón de rol reconocido"]
+                return (
+                    role,
+                    [f"{file.path}: término de ruta {term!r}" for term in matched[:2]],
+                )
+        return "unknown", [f"{file.path}: sin término de ruta reconocido"]
+
+    def _path_tokens(self, path: str) -> set[str]:
+        """Return stable role hints from the file location, not its implementation details."""
+        parts = path.lower().replace("\\", "/").split("/")
+        if "src" in parts:
+            parts = parts[parts.index("src") + 1 :]
+        elif len(parts) > 1:
+            parts = parts[1:]
+        filtered_parts = [
+            part for part in parts if part not in {"__init__.py", "__init__"}
+        ]
+        return {
+            token
+            for part in filtered_parts
+            for token in re.findall(r"[a-z0-9]+", part)
+        }
 
     def _confidence(
         self, role: ArchitectureRole, items: list[tuple[FileAnalysis, list[str]]]

@@ -11,16 +11,18 @@ MVP actual: análisis estático local, arquitectura por componentes, grafo Merma
 ```powershell
 codeatlas inspect .\mi-proyecto
 codeatlas analyze .\mi-proyecto --output .\analysis.json
-codeatlas dependencies .\mi-proyecto --output .\dependencies.mmd
-codeatlas classes .\mi-proyecto --output .\classes.mmd
-codeatlas graph .\mi-proyecto --view executive --output .\architecture-candidate.mmd
+codeatlas dependencies .\mi-proyecto --output .\dependencies-por-paquete.mmd
+codeatlas dependencies .\mi-proyecto --package src/graph --output .\graph-dependencias.mmd
+codeatlas dependencies .\mi-proyecto --level file --package src/graph --output .\graph-archivos.mmd
+codeatlas classes .\mi-proyecto --package src/graph --output .\graph-clases.mmd
+codeatlas classes .\mi-proyecto --focus NombreDeClase --output .\clase-detalle.mmd
 codeatlas report .\mi-proyecto --output .\informe.docx
 codeatlas report .\mi-proyecto --ai --output .\informe-con-ia.docx
 ```
 
-`dependencies` genera el diagrama técnico de imports. `classes` genera clases, métodos y herencia. `graph --view executive` es solo una hipótesis estática de componentes y no reemplaza un diagrama de arquitectura validado. Usa `graph --view technical` para la salida histórica completa de imports.
+`dependencies` genera por defecto un resumen técnico de imports por paquete y oculta pruebas. Usa `--package` para explorar una zona del repositorio y `--level file` para sus archivos. En la vista por archivo, `--package` agrupa visualmente quién usa el área, el área seleccionada y sus dependencias directas; los nombres se acortan para reducir cruces. `classes` admite `--package`, `--focus` y `--limit` para evitar diagramas imposibles de leer. El comando histórico `graph` conserva la salida técnica por archivo; no debe usarse como diagrama de arquitectura.
 
-`report --ai` lee exclusivamente `OPENAI_API_KEY` desde el entorno. Sin esa opción, CodeAtlas no envía archivos ni código fuera del equipo. El análisis de IA recibe evidencia seleccionada y fragmentos limitados de módulos relevantes; no utiliza agentes múltiples.
+`report` concentra su lectura principal en código de producción: resume pruebas e inicializadores, limita el detalle por módulo y distingue imports de biblioteca estándar, terceros e internos sin resolver. `report --ai` lee exclusivamente `OPENAI_API_KEY` desde el entorno. Sin esa opción, CodeAtlas no envía archivos ni código fuera del equipo. El análisis de IA recibe evidencia seleccionada y fragmentos limitados de módulos relevantes; no utiliza agentes múltiples.
 
 ```powershell
 $env:OPENAI_API_KEY = "tu-clave"

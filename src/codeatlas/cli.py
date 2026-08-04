@@ -109,9 +109,9 @@ def graph(
         typer.Option(
             "--view", help="Architecture view: executive (clean) or technical (complete)."
         ),
-    ] = "executive",
+    ] = "technical",
 ) -> None:
-    """Export an executive or complete Mermaid dependency graph."""
+    """Legacy graph command. Prefer dependencies or classes for explicit diagram types."""
     result = analysis_or_exit(repository)
     destination = output.expanduser().resolve()
     try:
@@ -130,6 +130,11 @@ def graph(
         console.print(f"[red]Error:[/red] {error}")
         raise typer.Exit(code=1) from error
     console.print(f"[green]Mermaid graph ({view}):[/green] {destination}")
+    if view == "executive":
+        console.print(
+            "[yellow]Experimental component hypothesis. "
+            "It is not a validated architecture diagram.[/yellow]"
+        )
 
 
 @app.command()
@@ -141,8 +146,22 @@ def dependencies(
     force: Annotated[
         bool, typer.Option("--force", help="Overwrite an existing output file.")
     ] = False,
+    level: Annotated[
+        Literal["package", "file"],
+        typer.Option("--level", help="Package summary (default) or complete file-level imports."),
+    ] = "package",
+    include_tests: Annotated[
+        bool, typer.Option("--include-tests", help="Include test packages in the package summary."),
+    ] = False,
+    package: Annotated[
+        str | None,
+        typer.Option("--package", help="Limit the diagram to a package, e.g. src/graph."),
+    ] = None,
+    limit: Annotated[
+        int, typer.Option("--limit", min=1, help="Maximum nodes in the diagram (default: 20).")
+    ] = 20,
 ) -> None:
-    """Export the complete, technical graph of detected Python imports."""
+    """Export detected imports by package or individual Python file."""
     result = analysis_or_exit(repository)
     destination = output.expanduser().resolve()
     try:
@@ -151,14 +170,21 @@ def dependencies(
                 f"Output already exists: {destination}. Use --force to overwrite it."
             )
         destination.parent.mkdir(parents=True, exist_ok=True)
+        graph_model = RepositoryAnalyzer().dependency_graph(result)
         destination.write_text(
-            RepositoryAnalyzer().dependency_graph(result).to_mermaid(view="technical"),
+            graph_model.package_mermaid(
+                include_tests=include_tests, package=package, limit=limit
+            )
+            if level == "package"
+            else graph_model.file_mermaid(
+                package=package, include_tests=include_tests, limit=limit
+            ),
             encoding="utf-8",
         )
     except CodeAtlasError as error:
         console.print(f"[red]Error:[/red] {error}")
         raise typer.Exit(code=1) from error
-    console.print(f"[green]Dependency diagram:[/green] {destination}")
+    console.print(f"[green]Dependency diagram ({level}):[/green] {destination}")
 
 
 @app.command()
@@ -170,8 +196,19 @@ def classes(
     force: Annotated[
         bool, typer.Option("--force", help="Overwrite an existing output file.")
     ] = False,
+    limit: Annotated[
+        int, typer.Option("--limit", min=1, help="Maximum classes to include (default: 25).")
+    ] = 25,
+    package: Annotated[
+        str | None,
+        typer.Option("--package", help="Limit the diagram to a package, e.g. src/graph."),
+    ] = None,
+    focus: Annotated[
+        str | None,
+        typer.Option("--focus", help="Show one class plus direct inheritance relations."),
+    ] = None,
 ) -> None:
-    """Export a class diagram with detected methods and inheritance."""
+    """Export a bounded class diagram with methods and detected inheritance."""
     result = analysis_or_exit(repository)
     destination = output.expanduser().resolve()
     try:
@@ -181,7 +218,10 @@ def classes(
             )
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(
-            RepositoryAnalyzer().dependency_graph(result).class_mermaid(), encoding="utf-8"
+            RepositoryAnalyzer().dependency_graph(result).class_mermaid(
+                package=package, focus=focus, limit=limit
+            ),
+            encoding="utf-8",
         )
     except CodeAtlasError as error:
         console.print(f"[red]Error:[/red] {error}")

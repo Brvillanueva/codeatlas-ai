@@ -43,3 +43,31 @@ def test_resolver_supports_a_nested_src_layout() -> None:
         ("project/src/graph/builder.py", "project/src/graph/state.py")
     ]
     assert external == []
+
+
+def test_resolver_separates_standard_library_and_unresolved_internal_imports() -> None:
+    files = [
+        FileAnalysis(
+            path="project/src/graph/state.py",
+            module_name="project.src.graph.state",
+        ),
+        FileAnalysis(
+            path="project/src/graph/builder.py",
+            module_name="project.src.graph.builder",
+            imports=[
+                ImportInfo(module="json"),
+                ImportInfo(module="src.models.missing"),
+                ImportInfo(module="langgraph.graph"),
+            ],
+        ),
+    ]
+
+    _, external = DependencyResolver().resolve(files)
+    classifications = [item.classification for item in files[1].imports]
+
+    assert classifications == [
+        "standard_library",
+        "unresolved_internal",
+        "third_party",
+    ]
+    assert external == ["langgraph"]

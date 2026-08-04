@@ -1,5 +1,6 @@
 """Editable Word report generation from deterministic repository analysis."""
 
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -13,13 +14,13 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from codeatlas.exceptions import OutputAlreadyExistsError
-from codeatlas.graph import DependencyGraph
 from codeatlas.models import ArchitectureNarrative, FileAnalysis, FunctionInfo, RepositoryAnalysis
 
 _BLUE = RGBColor(46, 116, 181)
 _DARK_BLUE = RGBColor(31, 77, 120)
 _MUTED = RGBColor(89, 89, 89)
 _HEADER_FILL = "F2F4F7"
+_DETAILED_MODULE_LIMIT = 25
 
 
 class WordReportGenerator:
@@ -43,7 +44,7 @@ class WordReportGenerator:
         self._configure_document(document)
         self._add_cover(document, analysis)
         document.add_page_break()
-        self._add_contents(document)
+        self._add_contents(document, includes_ai=narrative is not None)
         document.add_section(WD_SECTION_START.NEW_PAGE)
         self._add_footer(document.sections[-1])
         self._add_report(document, analysis, narrative)
@@ -102,7 +103,7 @@ class WordReportGenerator:
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title.paragraph_format.space_before = Pt(75)
         title.paragraph_format.space_after = Pt(10)
-        run = title.add_run("Informe de arquitectura")
+        run = title.add_run("Informe de análisis técnico")
         run.bold = True
         run.font.size = Pt(30)
         run.font.color.rgb = _DARK_BLUE
@@ -110,7 +111,7 @@ class WordReportGenerator:
         subtitle = document.add_paragraph()
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
         subtitle.paragraph_format.space_after = Pt(36)
-        run = subtitle.add_run("Análisis estático de repositorio Python")
+        run = subtitle.add_run("Evidencia estática de un repositorio Python")
         run.font.size = Pt(15)
         run.font.color.rgb = _MUTED
 
@@ -142,17 +143,20 @@ class WordReportGenerator:
         note_run.font.size = Pt(9.5)
         note_run.font.color.rgb = _MUTED
 
-    def _add_contents(self, document: Document) -> None:
+    def _add_contents(self, document: Document, includes_ai: bool) -> None:
         document.add_heading("Contenido", level=1)
-        for item in (
+        items = [
             "1. Como leer este informe",
-            "2. Resumen ejecutivo",
-            "3. Arquitectura detectada",
-            "4. Alcance y evidencia",
-            "5. Tecnologias y dependencias externas",
-            "6. Recomendaciones iniciales",
-            "Anexo tecnico",
-        ):
+            "2. Resumen para orientar la lectura",
+            "3. Hipótesis de organización técnica",
+            "4. Datos detectados y alcance",
+            "5. Tecnologías y dependencias externas",
+            "6. Áreas para revisión",
+            "Anexo técnico",
+        ]
+        if includes_ai:
+            items.insert(6, "7. Interpretación generada por IA (opcional)")
+        for item in items:
             document.add_paragraph(item)
 
     def _add_report(
@@ -161,27 +165,47 @@ class WordReportGenerator:
         analysis: RepositoryAnalysis,
         narrative: ArchitectureNarrative | None,
     ) -> None:
+        source_files = self._source_files(analysis.files)
+        test_files = [file for file in analysis.files if self._is_test_file(file.path)]
+        initializer_files = [
+            file
+            for file in analysis.files
+            if self._is_initializer(file.path) and not self._is_test_file(file.path)
+        ]
+        source_paths = {file.path for file in source_files}
+        central_modules = [
+            module for module in analysis.central_modules if module in source_paths
+        ]
+
         document.add_heading("1. Como leer este informe", level=1)
         document.add_paragraph(
-            "Los datos detectados proceden del analisis estatico de archivos Python e imports. "
-            "Las conclusiones con IA, si existen, se muestran aparte y citan los archivos que las respaldan."
+            "Este informe separa los hechos detectados de las hipótesis y, cuando se solicite, "
+            "de la interpretación generada por IA. Ninguna de las tres capas sustituye una "
+            "revisión "
+            "humana del dominio de negocio."
         )
-        document.add_heading("2. Resumen ejecutivo", level=1)
+        self._add_reading_legend(document)
+
+        document.add_heading("2. Resumen para orientar la lectura", level=1)
         stats = analysis.stats
         document.add_paragraph(
-            "CodeAtlas AI revisó la estructura del repositorio y encontró "
+            "CodeAtlas AI analizó "
             f"{stats.python_files} archivo(s) Python dentro de {stats.files_discovered} archivo(s) "
-            "descubierto(s). El resultado sirve como punto de partida para comprender el código, "
-            "planear una revisión técnica y detectar zonas que merecen atención."
+            f"descubierto(s). Esta vista principal se concentra en {len(source_files)} módulo(s) "
+            f"de código y resume {len(test_files)} archivo(s) de prueba. El resultado sirve como "
+            "punto de partida para comprender el código, "
+            "planear una revisión técnica y detectar zonas que merecen atención, pero no confirma "
+            "por sí solo cómo funciona el sistema en ejecución."
         )
         summary = self._table(document, 3, 3, (Inches(2.15), Inches(2.15), Inches(2.2)))
         for cell, label, value in zip(
             summary.rows[0].cells,
             ("Estructura", "Código", "Dependencias"),
             (
-                f"{stats.files_discovered} archivo(s)",
-                f"{stats.classes} clase(s) y {stats.functions} función(es)",
-                f"{stats.internal_imports} interna(s) y {stats.external_dependencies} externa(s)",
+                f"{len(source_files)} módulo(s) principal(es)",
+                f"{sum(len(file.classes) for file in source_files)} clase(s) y "
+                f"{sum(len(file.functions) for file in source_files)} función(es)",
+                f"{stats.internal_imports} interna(s) detectada(s)",
             ),
             strict=True,
         ):
@@ -200,22 +224,21 @@ class WordReportGenerator:
             summary.rows[2].cells,
             (
                 str(stats.methods),
-                str(len(analysis.central_modules)),
+                str(len(central_modules)),
                 str(stats.files_with_errors),
             ),
             strict=True,
         ):
             cell.text = value
 
-        document.add_heading("3. Arquitectura detectada", level=1)
-        self._add_architecture_overview(document, analysis)
-        if narrative:
-            self._add_ai_narrative(document, narrative)
+        document.add_heading("3. Hipótesis de organización técnica", level=1)
+        self._add_architecture_overview(document, analysis, source_paths)
 
-        document.add_heading("4. Alcance y evidencia", level=1)
+        document.add_heading("4. Datos detectados y alcance", level=1)
         document.add_paragraph(
-            "El informe utiliza análisis estático: nombres de archivos y módulos, estructuras Python, "
-            "importaciones y relaciones internas. No ejecuta el programa, no inspecciona bases de datos "
+            "El informe utiliza análisis estático: nombres de archivos y módulos, estructuras "
+            "Python, importaciones y relaciones internas. No ejecuta el programa, no inspecciona "
+            "bases de datos "
             "ni confirma reglas de negocio que no estén expresadas en el código."
         )
         self._add_label_detail_table(
@@ -228,114 +251,175 @@ class WordReportGenerator:
             ),
         )
 
-        document.add_heading("Arquitectura tecnica y dependencias", level=2)
-        if analysis.central_modules:
+        document.add_heading("Módulos que requieren atención técnica", level=2)
+        if central_modules:
             document.add_paragraph(
-                "Los siguientes módulos son los más conectados dentro del grafo de dependencias. "
-                "Conviene revisarlos primero al estudiar el flujo técnico o evaluar cambios:")
-            for module in analysis.central_modules:
+                "Los siguientes módulos son importados por más archivos dentro del conjunto "
+                "analizado. "
+                "Conviene revisarlos primero al estudiar cambios técnicos, porque otros módulos "
+                "dependen de ellos:")
+            for module in central_modules:
                 document.add_paragraph(module, style="List Bullet")
         else:
             document.add_paragraph(
-                "No se detectaron relaciones internas suficientes para identificar módulos centrales."
+                "No se detectaron relaciones internas suficientes para identificar módulos "
+                "centrales."
             )
 
-        if analysis.internal_dependencies:
-            table = self._table(document, len(analysis.internal_dependencies) + 1, 3, (Inches(2.15), Inches(2.15), Inches(2.2)))
+        source_dependencies = [
+            dependency
+            for dependency in analysis.internal_dependencies
+            if dependency.source in source_paths and dependency.target in source_paths
+        ]
+        if source_dependencies:
+            table = self._table(
+                document,
+                len(source_dependencies) + 1,
+                3,
+                (Inches(2.15), Inches(2.15), Inches(2.2)),
+            )
             self._set_header(table.rows[0].cells, ("Origen", "Destino", "Importación"))
-            for row, dependency in zip(table.rows[1:], analysis.internal_dependencies, strict=True):
+            for row, dependency in zip(table.rows[1:], source_dependencies, strict=True):
                 row.cells[0].text = dependency.source
                 row.cells[1].text = dependency.target
                 row.cells[2].text = dependency.imported_module
         else:
-            document.add_paragraph("No se detectaron dependencias internas entre los módulos analizados.")
+            document.add_paragraph(
+                "No se detectaron dependencias internas entre los módulos analizados."
+            )
 
         document.add_heading("5. Tecnologías y dependencias externas", level=1)
-        if analysis.external_dependencies:
-            document.add_paragraph(
-                "Dependencias externas detectadas por los imports. Esta lista no reemplaza un inventario "
-                "de paquetes instalado o un archivo de dependencias:")
-            for dependency in analysis.external_dependencies:
-                document.add_paragraph(dependency, style="List Bullet")
-        else:
-            document.add_paragraph("No se detectaron dependencias externas en los imports analizados.")
+        self._add_import_summary(document, source_files)
 
-        document.add_heading("6. Recomendaciones iniciales", level=1)
+        document.add_heading("6. Áreas para revisión", level=1)
         recommendations = [
-            "Validar con el equipo la responsabilidad de los módulos centrales antes de realizar cambios.",
-            "Completar docstrings y anotaciones de tipo en las áreas con mayor evolución o riesgo.",
+            "Validar con el equipo la responsabilidad real de los módulos más importados "
+            "antes de realizar cambios.",
             "Revisar las dependencias externas frente al archivo de paquetes del proyecto.",
-            "Usar este informe junto con pruebas y revisión humana; el análisis estático no ejecuta la aplicación.",
+            "Usar este informe junto con pruebas y revisión humana; el análisis estático no "
+            "ejecuta la aplicación.",
         ]
         if analysis.errors:
             recommendations.insert(
                 0,
-                "Corregir primero los archivos con errores de lectura o sintaxis para obtener una cobertura mayor.",
+                "Corregir primero los archivos con errores de lectura o sintaxis para obtener "
+                "una cobertura mayor.",
             )
         for recommendation in recommendations:
             document.add_paragraph(recommendation, style="List Bullet")
 
+        if narrative:
+            self._add_ai_narrative(document, narrative)
+
         document.add_heading("Anexo técnico", level=1)
-        document.add_heading("A. Inventario de archivos", level=2)
-        inventory = self._table(document, len(analysis.files) + 1, 5, (Inches(1.6), Inches(1.25), Inches(1.2), Inches(1.2), Inches(1.25)))
-        self._set_header(inventory.rows[0].cells, ("Archivo", "Módulo", "Clases", "Funciones", "Estado"))
-        for row, file in zip(inventory.rows[1:], analysis.files, strict=True):
+        document.add_heading("A. Inventario de código principal", level=2)
+        inventory = self._table(
+            document,
+            len(source_files) + 1,
+            5,
+            (Inches(1.6), Inches(1.25), Inches(1.2), Inches(1.2), Inches(1.25)),
+        )
+        self._set_header(
+            inventory.rows[0].cells,
+            ("Archivo", "Módulo", "Clases", "Funciones", "Estado"),
+        )
+        for row, file in zip(inventory.rows[1:], source_files, strict=True):
             row.cells[0].text = file.path
             row.cells[1].text = file.module_name
             row.cells[2].text = str(len(file.classes))
             row.cells[3].text = str(len(file.functions))
             row.cells[4].text = "Error" if file.syntax_error else "Analizado"
 
-        document.add_heading("B. Detalle de módulos", level=2)
-        for file in analysis.files:
+        document.add_heading("B. Detalle de módulos seleccionados", level=2)
+        detailed_files = self._detailed_files(source_files, central_modules)
+        if len(detailed_files) < len(source_files):
+            document.add_paragraph(
+                f"Para conservar el informe legible, este anexo muestra {len(detailed_files)} de "
+                f"{len(source_files)} módulos principales. El comando 'codeatlas analyze' permite "
+                "exportar el inventario completo en JSON."
+            )
+        for file in detailed_files:
             self._add_file_detail(document, file)
 
-        document.add_heading("C. Diagrama ejecutivo Mermaid", level=2)
+        document.add_heading("C. Pruebas e inicializadores resumidos", level=2)
         document.add_paragraph(
-            "Código fuente de una vista reducida: oculta pruebas y archivos de inicialización, agrupa módulos "
-            "por carpeta y destaca los nodos más conectados. Puede copiarse a un visor Mermaid para generar una visualización."
+            f"Se excluyeron {len(test_files)} archivo(s) de prueba y {len(initializer_files)} "
+            "inicializador(es) de la vista principal para evitar que oculten la estructura del "
+            "código."
         )
-        mermaid = DependencyGraph(analysis.files, analysis.internal_dependencies).to_mermaid(
-            view="executive", architecture=analysis.architecture
-        )
-        for line in mermaid.splitlines():
-            document.add_paragraph(line, style="CodeAtlas Code")
+        if test_files:
+            document.add_paragraph(
+                "Pruebas detectadas: " + ", ".join(file.path for file in test_files[:10])
+            )
 
-        document.add_heading("D. Errores y limitaciones", level=2)
+        document.add_heading("D. Diagramas técnicos disponibles", level=2)
+        document.add_paragraph(
+            "El mapa de dependencias y el diagrama de clases se exportan por separado. "
+            "No se incluye un diagrama de arquitectura automático si la evidencia estática no "
+            "es suficiente."
+        )
+
+        document.add_heading("E. Errores y limitaciones", level=2)
         if analysis.errors:
-            errors = self._table(document, len(analysis.errors) + 1, 3, (Inches(1.75), Inches(1.3), Inches(3.45)))
+            errors = self._table(
+                document,
+                len(analysis.errors) + 1,
+                3,
+                (Inches(1.75), Inches(1.3), Inches(3.45)),
+            )
             self._set_header(errors.rows[0].cells, ("Archivo", "Tipo", "Detalle"))
             for row, error in zip(errors.rows[1:], analysis.errors, strict=True):
                 row.cells[0].text = error.path
                 row.cells[1].text = error.kind
                 row.cells[2].text = error.message
         else:
-            document.add_paragraph("No se registraron errores de lectura ni sintaxis durante el análisis.")
+            document.add_paragraph(
+                "No se registraron errores de lectura ni sintaxis durante el análisis."
+            )
         document.add_paragraph(
-            "Limitaciones: el resultado describe el código de forma estática. Las llamadas dinámicas, "
-            "configuraciones externas, archivos no Python, comportamiento en ejecución y reglas de negocio "
+            "Limitaciones: el resultado describe el código de forma estática. Las llamadas "
+            "dinámicas, configuraciones externas, archivos no Python, comportamiento en "
+            "ejecución y reglas de negocio "
             "requieren validación adicional."
         )
 
-    def _add_architecture_overview(self, document: Document, analysis: RepositoryAnalysis) -> None:
+    def _add_architecture_overview(
+        self, document: Document, analysis: RepositoryAnalysis, source_paths: set[str]
+    ) -> None:
         document.add_paragraph(
-            "Componentes inferidos a partir de rutas, nombres, docstrings, clases y dependencias. "
-            "Una relacion A -> B significa que A importa o depende de B."
+            "Esta clasificación es heurística: usa la ruta y los nombres de archivos. "
+            "No representa por sí sola una arquitectura validada."
         )
-        components = [item for item in analysis.architecture.components if item.role != "tests"]
+        components = [
+            (item, [path for path in item.files if path in source_paths])
+            for item in analysis.architecture.components
+            if item.role != "tests"
+        ]
+        components = [item for item in components if item[1]]
         if components:
             table = self._table(
-                document, len(components) + 1, 4, (Inches(1.5), Inches(1.0), Inches(1.0), Inches(3.0))
+                document,
+                len(components) + 1,
+                4,
+                (Inches(1.5), Inches(1.0), Inches(1.0), Inches(3.0)),
             )
-            self._set_header(table.rows[0].cells, ("Componente", "Archivos", "Confianza", "Evidencia"))
-            for row, component in zip(table.rows[1:], components, strict=True):
+            self._set_header(
+                table.rows[0].cells,
+                ("Componente", "Archivos", "Confianza", "Evidencia"),
+            )
+            for row, (component, files) in zip(table.rows[1:], components, strict=True):
                 row.cells[0].text = component.name
-                row.cells[1].text = str(len(component.files))
+                row.cells[1].text = str(len(files))
                 row.cells[2].text = f"{component.confidence:.0%}"
                 row.cells[3].text = "; ".join(component.evidence[:2])
-        if analysis.architecture.dependencies:
+        relationships = [
+            dependency
+            for dependency in analysis.architecture.dependencies
+            if any(path in source_paths for path in dependency.evidence_files)
+        ]
+        if relationships:
             document.add_paragraph("Relaciones entre componentes detectadas:")
-            for dependency in analysis.architecture.dependencies:
+            for dependency in relationships:
                 document.add_paragraph(
                     f"{dependency.source} -> {dependency.target} "
                     f"({dependency.imports_count} import(s); evidencia: "
@@ -345,10 +429,114 @@ class WordReportGenerator:
         else:
             document.add_paragraph("No se detectaron relaciones entre componentes diferentes.")
 
+    def _add_import_summary(self, document: Document, files: list[FileAnalysis]) -> None:
+        categories: defaultdict[str, set[str]] = defaultdict(set)
+        for file in files:
+            for item in file.imports:
+                if item.classification is None:
+                    continue
+                root = item.module.split(".", maxsplit=1)[0] if item.module else ""
+                if root:
+                    categories[item.classification].add(root)
+        third_party = sorted(categories["third_party"])
+        standard_library = sorted(categories["standard_library"])
+        unresolved_internal = sorted(categories["unresolved_internal"])
+        self._add_label_detail_table(
+            document,
+            (
+                (
+                    "Terceros",
+                    ", ".join(third_party)
+                    if third_party
+                    else "No se detectaron paquetes de terceros en el código principal.",
+                ),
+                (
+                    "Biblioteca estándar",
+                    f"{len(standard_library)} módulo(s) detectado(s). No requieren instalación "
+                    "externa.",
+                ),
+                (
+                    "Internos sin resolver",
+                    ", ".join(unresolved_internal)
+                    if unresolved_internal
+                    else "No se detectaron imports internos sin resolver.",
+                ),
+            ),
+        )
+        if unresolved_internal:
+            document.add_paragraph(
+                "Los imports internos sin resolver pueden indicar una ruta incompleta o un "
+                "archivo fuera del alcance analizado. Deben revisarse antes de tratarlos "
+                "como paquetes externos."
+            )
+
+    def _source_files(self, files: list[FileAnalysis]) -> list[FileAnalysis]:
+        return [
+            file
+            for file in files
+            if not self._is_test_file(file.path) and not self._is_initializer(file.path)
+        ]
+
+    def _detailed_files(
+        self, files: list[FileAnalysis], central_modules: list[str]
+    ) -> list[FileAnalysis]:
+        central = set(central_modules)
+        return sorted(
+            files,
+            key=lambda file: (
+                file.path not in central,
+                -(file.line_count + len(file.imports) * 5 + len(file.classes) * 10),
+                file.path,
+            ),
+        )[:_DETAILED_MODULE_LIMIT]
+
+    def _is_test_file(self, path: str) -> bool:
+        parts = path.replace("\\", "/").split("/")
+        return "tests" in parts or parts[-1].startswith("test_")
+
+    def _is_initializer(self, path: str) -> bool:
+        return path.replace("\\", "/").endswith("/__init__.py") or path == "__init__.py"
+
+    def _truncate(self, text: str, limit: int = 280) -> str:
+        normalized = " ".join(text.strip().split())
+        return normalized if len(normalized) <= limit else f"{normalized[: limit - 1]}…"
+
+    def _add_reading_legend(self, document: Document) -> None:
+        table = self._table(
+            document,
+            4,
+            3,
+            (Inches(1.5), Inches(2.45), Inches(2.65)),
+        )
+        self._set_header(table.rows[0].cells, ("Etiqueta", "Qué significa", "Cómo usarla"))
+        rows = (
+            (
+                "Dato detectado",
+                "Archivo, import, clase, función o error extraído localmente.",
+                "Se puede verificar en el código analizado.",
+            ),
+            (
+                "Hipótesis estática",
+                "Clasificación basada en rutas, nombres y relaciones de importación.",
+                "Debe validarse con quien conoce el proyecto.",
+            ),
+            (
+                "Interpretación IA",
+                "Explicación opcional generada a partir de evidencia seleccionada.",
+                "Nunca se presenta como hecho; incluye archivos de respaldo.",
+            ),
+        )
+        fills = ("EAF4E3", "FFF3CD", "E8EEF5")
+        for row, values, fill in zip(table.rows[1:], rows, fills, strict=True):
+            for cell, value in zip(row.cells, values, strict=True):
+                cell.text = value
+            self._shade_cell(row.cells[0], fill)
+            row.cells[0].paragraphs[0].runs[0].bold = True
+
     def _add_ai_narrative(
         self, document: Document, narrative: ArchitectureNarrative
     ) -> None:
-        document.add_heading("Interpretacion generada por IA (opcional)", level=2)
+        document.add_heading("7. Interpretación generada por IA (opcional)", level=1)
         document.add_paragraph(
             "Esta seccion es una interpretacion, no un dato comprobado por si sola. "
             "Debe leerse junto con la evidencia indicada."
@@ -381,10 +569,11 @@ class WordReportGenerator:
         facts = [
             f"Módulo: {file.module_name}",
             f"Líneas detectadas: {file.line_count}",
-            f"Clases: {len(file.classes)}; funciones de módulo: {len(file.functions)}; imports: {len(file.imports)}.",
+            f"Clases: {len(file.classes)}; funciones de módulo: {len(file.functions)}; "
+            f"imports: {len(file.imports)}.",
         ]
         if file.docstring:
-            facts.append(f"Descripción declarada: {file.docstring.strip()}")
+            facts.append(f"Descripción declarada: {self._truncate(file.docstring)}")
         if file.syntax_error:
             facts.append(f"Error de sintaxis: {file.syntax_error}")
         for fact in facts:
@@ -405,10 +594,16 @@ class WordReportGenerator:
                 document.add_paragraph(self._signature(function), style="List Bullet")
         if file.imports:
             document.add_paragraph("Imports detectados:")
+            statuses = {
+                "internal": "interna",
+                "standard_library": "biblioteca estándar",
+                "third_party": "tercero",
+                "unresolved_internal": "interna sin resolver",
+            }
             for item in file.imports:
                 names = ", ".join(item.imported_names)
                 suffix = f" ({names})" if names else ""
-                status = "interna" if item.is_internal else "externa" if item.is_internal is False else "sin resolver"
+                status = statuses.get(item.classification, "sin resolver")
                 document.add_paragraph(f"{item.module}{suffix} - {status}", style="List Bullet")
 
     def _signature(self, function: FunctionInfo) -> str:
@@ -426,7 +621,9 @@ class WordReportGenerator:
             result += f" -> {function.return_type}"
         return result
 
-    def _add_label_detail_table(self, document: Document, rows: tuple[tuple[str, str], ...]) -> None:
+    def _add_label_detail_table(
+        self, document: Document, rows: tuple[tuple[str, str], ...]
+    ) -> None:
         table = self._table(document, len(rows), 2, (Inches(1.85), Inches(4.65)))
         for row, (label, value) in zip(table.rows, rows, strict=True):
             row.cells[0].text = label
@@ -438,10 +635,26 @@ class WordReportGenerator:
         table = document.add_table(rows=rows, cols=columns)
         table.style = "Table Grid"
         table.autofit = False
+        widths_dxa = tuple(int(width.twips) for width in widths)
+        properties = table._tbl.tblPr
+        table_width = properties.find(qn("w:tblW"))
+        table_width.set(qn("w:w"), str(sum(widths_dxa)))
+        table_width.set(qn("w:type"), "dxa")
+        table_indent = properties.find(qn("w:tblInd"))
+        if table_indent is None:
+            table_indent = OxmlElement("w:tblInd")
+            properties.append(table_indent)
+        table_indent.set(qn("w:w"), "120")
+        table_indent.set(qn("w:type"), "dxa")
+        for grid_column, width in zip(table._tbl.tblGrid.gridCol_lst, widths_dxa, strict=True):
+            grid_column.set(qn("w:w"), str(width))
         for row in table.rows:
-            for cell, width in zip(row.cells, widths, strict=True):
+            for cell, width, width_dxa in zip(row.cells, widths, widths_dxa, strict=True):
                 cell.width = width
                 cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                cell_width = cell._tc.get_or_add_tcPr().find(qn("w:tcW"))
+                cell_width.set(qn("w:w"), str(width_dxa))
+                cell_width.set(qn("w:type"), "dxa")
                 self._set_cell_margins(cell)
         return table
 
